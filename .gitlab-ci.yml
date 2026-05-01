@@ -1,0 +1,56 @@
+stages:
+  - generate
+  - apply
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
+    
+variables:
+  TF_STATE_NAME: "prod"
+  TF_ADDRESS: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${TF_STATE_NAME}"
+  TF_LOCK_ADDRESS: "${TF_ADDRESS}/lock"
+  TF_UNLOCK_ADDRESS: "${TF_ADDRESS}/lock"
+
+default:
+  tags:
+    - gitlab_runner
+  before_script:
+    - echo "Starting job..."
+
+generate_json:
+  stage: generate
+  image: python:3.11
+  script:
+    - python --version
+    - pip install requests
+    - python cicd.py
+    - test -f nautobot_vnets.json
+  artifacts:
+    paths:
+      - nautobot_vnets.json
+    expire_in: 1 hour
+
+terraform_apply:
+  stage: apply
+  image:
+    name: hashicorp/terraform:1.7.5
+    entrypoint: [""]
+  dependencies:
+    - generate_json
+  script:
+    - terraform version
+    - terraform init -reconfigure
+      -backend-config="address=${TF_ADDRESS}"
+      -backend-config="lock_address=${TF_LOCK_ADDRESS}"
+      -backend-config="unlock_address=${TF_UNLOCK_ADDRESS}"
+      -backend-config="username=${TF_USERNAME}"
+      -backend-config="password=${TF_PASSWORD}"
+      -backend-config="lock_method=POST"
+      -backend-config="unlock_method=DELETE"
+      -backend-config="retry_wait_min=5"
+    - terraform plan -var-file=nautobot_vnets.json -out=tfplan
+    - terraform apply -auto-approve tfplan
+  only:
+    - main
